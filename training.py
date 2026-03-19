@@ -1,5 +1,6 @@
 import numpy as np
 from datasets import load_dataset
+from transformers import AutoTokenizer
 
 # CÓDIGO DO LAB 04 (base para este laboratório)
 
@@ -81,3 +82,42 @@ class DecoderBlock:
 # TAREFA 1 - Preparando o Dataset Real (Hugging Face)
 dataset = load_dataset("bentrevett/multi30k", split="train")
 dataset = dataset.select(range(1000))
+
+src_sentences = [ex["en"] for ex in dataset]
+tgt_sentences = [ex["de"] for ex in dataset]
+
+# TAREFA 2 - Tokenização Básica
+tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
+
+START_TOKEN_ID = tokenizer.cls_token_id 
+EOS_TOKEN_ID   = tokenizer.sep_token_id
+PAD_TOKEN_ID   = tokenizer.pad_token_id  
+
+MAX_LEN = 30
+
+def tokenize_pair(src, tgt):
+    # Converte um par de frases em listas de inteiros com tokens especiais.
+    src_ids = tokenizer.encode(src, add_special_tokens=False)[:MAX_LEN]
+    tgt_ids = tokenizer.encode(tgt, add_special_tokens=False)[:MAX_LEN - 2]
+    # Adiciona <START> e <EOS> na frase de destino (Decoder)
+    tgt_ids = [START_TOKEN_ID] + tgt_ids + [EOS_TOKEN_ID]
+    return src_ids, tgt_ids
+
+def pad_sequence(seq, max_len, pad_id):
+    return seq + [pad_id] * (max_len - len(seq))
+
+# Tokeniza todas as 1000 frases
+src_encoded = []
+tgt_encoded = []
+for src, tgt in zip(src_sentences, tgt_sentences):
+    s, t = tokenize_pair(src, tgt)
+    src_encoded.append(pad_sequence(s, MAX_LEN, PAD_TOKEN_ID))
+    tgt_encoded.append(pad_sequence(t, MAX_LEN + 1, PAD_TOKEN_ID))
+
+src_encoded = np.array(src_encoded, dtype=np.int32)
+tgt_encoded = np.array(tgt_encoded, dtype=np.int32)
+
+# Decoder input: tudo menos o último token
+# Decoder target: tudo menos o primeiro token (<START>)
+tgt_input  = tgt_encoded[:, :-1] 
+tgt_target = tgt_encoded[:, 1:] 
