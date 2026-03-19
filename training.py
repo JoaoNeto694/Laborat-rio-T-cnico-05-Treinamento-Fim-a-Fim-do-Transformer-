@@ -1,3 +1,7 @@
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer
@@ -90,8 +94,8 @@ tgt_sentences = [ex["de"] for ex in dataset]
 tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
 
 START_TOKEN_ID = tokenizer.cls_token_id 
-EOS_TOKEN_ID   = tokenizer.sep_token_id
-PAD_TOKEN_ID   = tokenizer.pad_token_id  
+EOS_TOKEN_ID = tokenizer.sep_token_id
+PAD_TOKEN_ID = tokenizer.pad_token_id  
 
 MAX_LEN = 30
 
@@ -119,5 +123,89 @@ tgt_encoded = np.array(tgt_encoded, dtype=np.int32)
 
 # Decoder input: tudo menos o último token
 # Decoder target: tudo menos o primeiro token (<START>)
-tgt_input  = tgt_encoded[:, :-1] 
+tgt_input = tgt_encoded[:, :-1] 
 tgt_target = tgt_encoded[:, 1:] 
+
+
+# TAREFA 3 - O Motor de Otimização (Training Loop)
+# Instanciando o modelo com dimensões viáveis para o laboratório
+d_model = 128
+h = 4
+N = 2
+d_ffn = 256
+vocab_size = tokenizer.vocab_size
+
+# Camadas treináveis com PyTorch (embeddings + projeção final)
+src_embedding = nn.Embedding(vocab_size, d_model, padding_idx=PAD_TOKEN_ID)
+tgt_embedding = nn.Embedding(vocab_size, d_model, padding_idx=PAD_TOKEN_ID)
+linear_out = nn.Linear(d_model, vocab_size)
+
+# Blocos do Transformer (NumPy, do Lab 04)
+encoder_blocks = [EncoderBlock(d_model, h, d_ffn) for _ in range(N)]
+decoder_blocks = [DecoderBlock(d_model, h, d_ffn) for _ in range(N)]
+
+# Função de Perda: CrossEntropyLoss com ignore_index para não penalizar o padding
+criterion = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN_ID)
+
+# Otimizador Adam (mesmo usado no paper original)
+optimizer = optim.Adam(
+    list(src_embedding.parameters()) +
+    list(tgt_embedding.parameters()) +
+    list(linear_out.parameters()),
+    lr=1e-3
+)
+
+def run_encoder(src_ids_np):
+    src_tensor = torch.tensor(src_ids_np, dtype=torch.long)
+    Z = src_embedding(src_tensor).detach().numpy()
+    for block in encoder_blocks:
+        Z = block.forward(Z)
+    return Z
+
+def run_decoder(tgt_ids_np, encoder_out_np):
+    tgt_tensor = torch.tensor(tgt_ids_np, dtype=torch.long)
+    Y = tgt_embedding(tgt_tensor).detach().numpy()
+    for block in decoder_blocks:
+        Y = block.forward(Y, encoder_out_np)
+    return Y
+
+BATCH_SIZE = 32
+N_EPOCHS = 10
+N_SAMPLES = len(src_encoded)
+
+for epoch in range(1, N_EPOCHS + 1):
+    epoch_loss = 0.0
+    n_batches  = 0
+
+    for start in range(0, N_SAMPLES, BATCH_SIZE):
+        src_b = src_encoded[start:start + BATCH_SIZE]
+        tin_b = tgt_input  [start:start + BATCH_SIZE]
+        tout_b = tgt_target[start:start + BATCH_SIZE]
+
+        # Forward: Encoder
+        encoder_out = run_encoder(src_b)  
+
+        # Forward: Decoder
+        decoder_out = run_decoder(tin_b, encoder_out)
+
+        # Projeção final para logits (PyTorch para usar autograd)
+        dec_tensor = torch.tensor(decoder_out, dtype=torch.float32)
+        logits = linear_out(dec_tensor)
+
+        # Calcula o erro (Loss)
+        B, T, V = logits.shape
+        loss = criterion(
+            logits.reshape(B * T, V),
+            torch.tensor(tout_b, dtype=torch.long).reshape(B * T)
+        )
+
+        # Backward + Step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        epoch_loss += loss.item()
+        n_batches  += 1
+
+    print(f"{epoch:>2d}/{N_EPOCHS}  |  Loss: {epoch_loss / n_batches:.4f}")
+
